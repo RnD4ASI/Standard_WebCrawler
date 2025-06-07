@@ -389,3 +389,93 @@ class TestConvertHtmlToMarkdown(unittest.TestCase):
         self.assertIn("| Data 1 | Data 2 |", markdown_output) # Adjusted spacing
         self.assertTrue(markdown_output.count('|') >= 6) # Basic check for table structure
         self.assertIn("---", markdown_output) # Separator line
+
+    def test_ordered_list_conversion(self):
+        html_input = "<ol><li>First item</li><li>Second item</li></ol>"
+        # Expected:
+        # 1. First item
+        # 2. Second item
+        markdown_output = apra_crawler.convert_html_to_markdown(html_input)
+        # Normalize by splitting lines and stripping whitespace
+        output_lines = [line.strip() for line in markdown_output.strip().split('\n')]
+        expected_lines = [
+            "1. First item",
+            "2. Second item"
+        ]
+        self.assertEqual(output_lines, expected_lines)
+
+    def test_explicit_paragraph_numbering(self):
+        html_input = "<p>1. Explicit first.</p><p>2. Explicit second.</p>"
+        # Expected:
+        # 1. Explicit first.
+        #
+        # 2. Explicit second.
+        # (markdownify usually adds blank lines between <p> tags)
+        markdown_output = apra_crawler.convert_html_to_markdown(html_input)
+        # Check for the core text, allowing for some flexibility in newlines
+        self.assertIn("1. Explicit first.", markdown_output)
+        self.assertIn("2. Explicit second.", markdown_output)
+        # A more specific check if needed, after observing output:
+        expected_parts = ["1. Explicit first.", "2. Explicit second."]
+        normalized_output = "\n".join([line.strip() for line in markdown_output.strip().split('\n') if line.strip()])
+        expected_output = "\n".join(expected_parts)
+        # This might be too strict if markdownify adds more than one blank line.
+        # Let's stick to assertIn for robustness or split and filter empty lines:
+        output_lines = [line.strip() for line in markdown_output.strip().split('\n') if line.strip()]
+        self.assertEqual(output_lines, expected_parts)
+
+
+    def test_hr_tag_conversion(self):
+        html_input = "<p>Some text</p><hr><p>Other text</p>"
+        # Expected:
+        # Some text
+        #
+        # ---
+        #
+        # Other text
+        markdown_output = apra_crawler.convert_html_to_markdown(html_input)
+        # Normalize whitespace and split into lines
+        output_lines = [line.strip() for line in markdown_output.strip().split('\n')]
+        # Filter out empty lines that markdownify might add around hr
+        output_lines_filtered = [line for line in output_lines if line]
+
+        expected_structure = [
+            "Some text",
+            "---",
+            "Other text"
+        ]
+        self.assertEqual(output_lines_filtered, expected_structure)
+
+    def test_bolded_paragraph_as_subheading(self):
+        html_input = "<p><strong>This is a bold subheading</strong></p>"
+        expected_markdown = "**This is a bold subheading**"
+        markdown_output = apra_crawler.convert_html_to_markdown(html_input)
+        self.assertEqual(markdown_output.strip(), expected_markdown)
+
+    def test_standard_headings_regression(self):
+        html_input = "<h2>A Standard Heading</h2><h3>A Sub-heading</h3>"
+        # Expected (markdownify might use setext for H2 if it's the first/only heading):
+        # A Standard Heading
+        # ==================
+        #
+        # ### A Sub-heading
+        # OR
+        # ## A Standard Heading
+        #
+        # ### A Sub-heading
+        markdown_output = apra_crawler.convert_html_to_markdown(html_input)
+
+        # Check for presence of both heading texts
+        self.assertIn("A Standard Heading", markdown_output)
+        self.assertIn("A Sub-heading", markdown_output)
+
+        # Check for markdown heading markers
+        # This allows for either setext (H2) or atx (H2, H3)
+        # Markdownify uses '---' for H2 setext style with default options
+        is_setext_h2 = "A Standard Heading\n------------------" in markdown_output or \
+                       "A Standard Heading\n---" in markdown_output # shorter line also possible
+        is_atx_h2 = "## A Standard Heading" in markdown_output
+        is_atx_h3 = "### A Sub-heading" in markdown_output
+
+        self.assertTrue(is_setext_h2 or is_atx_h2, f"H2 marker not found in output:\n{markdown_output}")
+        self.assertTrue(is_atx_h3, f"H3 marker not found in output:\n{markdown_output}")
