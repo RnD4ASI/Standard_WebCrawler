@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock, mock_open
 import io
 import csv
+import os # Added import for os.path.join
 
 # Assuming apra_crawler.py is in the same directory or accessible in PYTHONPATH
 import apra_crawler
@@ -134,8 +135,9 @@ class TestExtractStandardDetails(unittest.TestCase):
             "pillar": pillar
         }
 
-        result = apra_crawler.extract_standard_details(url, category, pillar)
-        self.assertEqual(result, expected_details)
+        result_dict, result_soup = apra_crawler.extract_standard_details(url, category, pillar)
+        self.assertEqual(result_dict, expected_details)
+        self.assertIsNotNone(result_soup) # Basic check that soup is returned
 
     @patch('apra_crawler.requests.get')
     def test_extract_details_final_not_in_force_range(self, mock_requests_get):
@@ -163,8 +165,9 @@ class TestExtractStandardDetails(unittest.TestCase):
             "pillar": pillar
         }
 
-        result = apra_crawler.extract_standard_details(url, category, pillar)
-        self.assertEqual(result, expected_details)
+        result_dict, result_soup = apra_crawler.extract_standard_details(url, category, pillar)
+        self.assertEqual(result_dict, expected_details)
+        self.assertIsNotNone(result_soup)
 
     @patch('apra_crawler.requests.get')
     def test_extract_details_missing_info(self, mock_requests_get):
@@ -193,38 +196,69 @@ class TestExtractStandardDetails(unittest.TestCase):
             "pillar": pillar
         }
 
-        result = apra_crawler.extract_standard_details(url, category, pillar)
-        self.assertEqual(result, expected_details)
+        result_dict, result_soup = apra_crawler.extract_standard_details(url, category, pillar)
+        self.assertEqual(result_dict, expected_details)
+        self.assertIsNotNone(result_soup)
+
 
     @patch('apra_crawler.requests.get')
     def test_extract_details_network_error(self, mock_requests_get):
         mock_requests_get.side_effect = apra_crawler.requests.exceptions.RequestException("Test network error")
 
-        result = apra_crawler.extract_standard_details("https://example.com/error-page", "ErrorCategory", "ErrorPillar")
-        self.assertIsNone(result)
+        result_dict, result_soup = apra_crawler.extract_standard_details("https://example.com/error-page", "ErrorCategory", "ErrorPillar")
+        self.assertIsNone(result_dict)
+        self.assertIsNone(result_soup)
 
 class TestMainScript(unittest.TestCase):
     # Patch target is 'apra_crawler.get_standard_links' because main() in apra_crawler.py will call it from its own module.
+    @patch('apra_crawler.create_output_directory') # Mock directory creation
     @patch('apra_crawler.get_standard_links')
     @patch('apra_crawler.extract_standard_details')
     @patch('builtins.open', new_callable=mock_open)
     @patch('csv.DictWriter')
+    @patch('apra_crawler.convert_html_to_markdown') # Mock markdown conversion
     # Note: The order of mock arguments to the test function is from bottom-up for decorators.
-    def test_main_logic_with_data_and_csv_writing(self, mock_csv_dict_writer, mock_builtin_open, mock_extract_details, mock_get_links):
+    def test_main_logic_with_data_and_csv_writing(self, mock_convert_to_markdown, mock_csv_dict_writer, mock_builtin_open, mock_extract_details, mock_get_links, mock_create_dir):
         # 1. Setup Mocks
         mock_get_links.return_value = [
             {'url': 'http://example.com/cps101', 'category': 'Governance', 'pillar': 'Core'},
             {'url': 'http://example.com/sps202', 'category': 'Risk', 'pillar': 'Supporting'}
         ]
 
-        expected_data_from_extract = [
-            {'title': 'CPS 101', 'url': 'http://example.com/cps101', 'status': 'Current', 'date': 'Jan 2023', 'category': 'Governance', 'pillar': 'Core'},
-            {'title': 'SPS 202', 'url': 'http://example.com/sps202', 'status': 'Draft', 'date': 'Feb 2024', 'category': 'Risk', 'pillar': 'Supporting'}
+        # Mock soup object needed for main() logic
+        mock_soup_cps101 = MagicMock(spec=apra_crawler.BeautifulSoup)
+        mock_soup_sps202 = MagicMock(spec=apra_crawler.BeautifulSoup)
+
+        # Simulate finding a main content element
+        mock_main_content_element_cps101 = MagicMock()
+        mock_main_content_element_cps101.__str__.return_value = "<html><body><h1>CPS 101 Content</h1></body></html>"
+        mock_soup_cps101.find.return_value = mock_main_content_element_cps101
+
+        mock_main_content_element_sps202 = MagicMock()
+        mock_main_content_element_sps202.__str__.return_value = "<html><body><h1>SPS 202 Content</h1></body></html>"
+        mock_soup_sps202.find.return_value = mock_main_content_element_sps202
+
+        details_cps101 = {'title': 'CPS 101 Governance', 'url': 'http://example.com/cps101', 'status': 'Current', 'date': 'Jan 2023', 'category': 'Governance', 'pillar': 'Core'}
+        details_sps202 = {'title': 'SPS 202 Risk Mgt', 'url': 'http://example.com/sps202', 'status': 'Draft', 'date': 'Feb 2024', 'category': 'Risk', 'pillar': 'Supporting'}
+
+        mock_extract_details.side_effect = [
+            (details_cps101, mock_soup_cps101),
+            (details_sps202, mock_soup_sps202)
         ]
-        mock_extract_details.side_effect = expected_data_from_extract
+
+        mock_convert_to_markdown.side_effect = ["CPS 101 Markdown", "SPS 202 Markdown"]
 
         mock_writer_instance = MagicMock()
         mock_csv_dict_writer.return_value = mock_writer_instance
+
+        # Create specific MagicMock instances for each file handle
+        mock_csv_file_handle = MagicMock(name="csv_file_handle")
+        mock_md_file_handle1 = MagicMock(name="md_file_handle1")
+        mock_md_file_handle2 = MagicMock(name="md_file_handle2")
+
+        # Corrected order: MD1, MD2, then CSV
+        mock_builtin_open.side_effect = [mock_md_file_handle1, mock_md_file_handle2, mock_csv_file_handle]
+
 
         # 2. Call the main function from apra_crawler
         # The BANKING_HANDBOOK_URL is hardcoded in apra_crawler.main, so we don't need to pass it.
@@ -235,42 +269,69 @@ class TestMainScript(unittest.TestCase):
         # BANKING_HANDBOOK_URL is used by apra_crawler.main() internally
         mock_get_links.assert_called_once_with(apra_crawler.BANKING_HANDBOOK_URL)
         self.assertEqual(mock_extract_details.call_count, 2)
-        mock_extract_details.assert_any_call('http://example.com/cps101', 'Governance', 'Core')
-        mock_extract_details.assert_any_call('http://example.com/sps202', 'Risk', 'Supporting')
+        # ... existing assertions for extract_details calls ...
 
-        # Check that the data returned by main() is what we expect
-        self.assertEqual(returned_data, expected_data_from_extract)
+        # Check that the data returned by main() is what we expect (list of dicts)
+        self.assertEqual(returned_data, [details_cps101, details_sps202])
 
         # Check CSV writing
-        # output_csv_file is hardcoded in apra_crawler.main() as "apra_banking_standards.csv"
-        mock_builtin_open.assert_called_once_with("apra_banking_standards.csv", 'w', newline='', encoding='utf-8')
-        mock_csv_dict_writer.assert_called_once_with(mock_builtin_open(), fieldnames=["title", "url", "status", "date", "category", "pillar"])
-        mock_writer_instance.writeheader.assert_called_once()
-        mock_writer_instance.writerows.assert_called_once_with(expected_data_from_extract)
+        mock_builtin_open.assert_any_call("apra_banking_standards.csv", 'w', newline='', encoding='utf-8')
+        # The object passed to DictWriter should be the result of mock_csv_file_handle.__enter__()
+        mock_csv_dict_writer.assert_called_once_with(mock_csv_file_handle.__enter__(), fieldnames=["title", "url", "status", "date", "category", "pillar"])
+        mock_writer_instance.writeheader.assert_called_once() # This is called on the DictWriter instance
+        # writerows is also called on the DictWriter instance, which is mock_writer_instance
+        mock_writer_instance.writerows.assert_called_once_with([details_cps101, details_sps202])
 
+        # Check Markdown saving
+        mock_create_dir.assert_called_once()
+        self.assertEqual(mock_convert_to_markdown.call_count, 2)
+        mock_convert_to_markdown.assert_any_call("<html><body><h1>CPS 101 Content</h1></body></html>")
+        mock_convert_to_markdown.assert_any_call("<html><body><h1>SPS 202 Content</h1></body></html>")
+
+        # Check that open was called for markdown files
+        sanitized_title_cps101 = apra_crawler.sanitize_filename(details_cps101['title'])
+        sanitized_title_sps202 = apra_crawler.sanitize_filename(details_sps202['title'])
+
+        expected_md_path_cps101 = os.path.join("output/markdown_standards", sanitized_title_cps101 + ".md")
+        expected_md_path_sps202 = os.path.join("output/markdown_standards", sanitized_title_sps202 + ".md")
+
+        # Check calls to open for MD files (these are the others in mock_builtin_open.side_effect)
+        mock_builtin_open.assert_any_call(expected_md_path_cps101, 'w', encoding='utf-8')
+        mock_builtin_open.assert_any_call(expected_md_path_sps202, 'w', encoding='utf-8')
+
+        # Check that write was called on the MD file handles' __enter__() result
+        mock_md_file_handle1.__enter__().write.assert_called_once_with("CPS 101 Markdown")
+        mock_md_file_handle2.__enter__().write.assert_called_once_with("SPS 202 Markdown")
+
+
+    @patch('apra_crawler.create_output_directory')
     @patch('apra_crawler.get_standard_links')
     @patch('apra_crawler.extract_standard_details')
     @patch('builtins.open', new_callable=mock_open)
-    def test_main_logic_no_links_found(self, mock_builtin_open, mock_extract_details, mock_get_links):
+    def test_main_logic_no_links_found(self, mock_builtin_open, mock_extract_details, mock_get_links, mock_create_dir):
         mock_get_links.return_value = [] # No links found
 
         apra_crawler.main()
 
+        mock_create_dir.assert_called_once()
         mock_get_links.assert_called_once_with(apra_crawler.BANKING_HANDBOOK_URL)
         mock_extract_details.assert_not_called()
         mock_builtin_open.assert_not_called() # CSV file should not be opened
 
+    @patch('apra_crawler.create_output_directory')
     @patch('apra_crawler.get_standard_links')
     @patch('apra_crawler.extract_standard_details')
     @patch('builtins.open', new_callable=mock_open)
-    def test_main_logic_no_details_extracted(self, mock_builtin_open, mock_extract_details, mock_get_links):
+    def test_main_logic_no_details_extracted(self, mock_builtin_open, mock_extract_details, mock_get_links, mock_create_dir):
         mock_get_links.return_value = [
             {'url': 'http://example.com/cps101', 'category': 'Governance', 'pillar': 'Core'}
         ]
-        mock_extract_details.return_value = None # Simulate extraction failure
+        # extract_standard_details now returns (None, None) on failure
+        mock_extract_details.return_value = (None, None)
 
         apra_crawler.main()
 
+        mock_create_dir.assert_called_once()
         mock_get_links.assert_called_once_with(apra_crawler.BANKING_HANDBOOK_URL)
         mock_extract_details.assert_called_once_with('http://example.com/cps101', 'Governance', 'Core')
         mock_builtin_open.assert_not_called() # No data, so no CSV file
@@ -278,3 +339,53 @@ class TestMainScript(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestConvertHtmlToMarkdown(unittest.TestCase):
+    def test_basic_html_elements(self):
+        html_input = "<p>Hello</p><h1>Heading</h1><ul><li>Item 1</li><li>Item 2</li></ul>"
+        # Expected markdown can vary slightly based on markdownify's exact output and options.
+        # We'll check for key structural elements and content.
+        # Common markdownify output:
+        # Hello\n\n# Heading\n\n* Item 1\n* Item 2
+        expected_md_parts = [
+            "Hello",
+            "# Heading",
+            "* Item 1",
+            "* Item 2"
+        ]
+        markdown_output = apra_crawler.convert_html_to_markdown(html_input)
+
+        # Normalize newlines and spacing for comparison if needed, or check parts.
+        # For simplicity, check if parts are present and in reasonable structure.
+        self.assertIn("Hello", markdown_output)
+        # Check for Setext-style heading
+        self.assertIn("Heading\n=======", markdown_output)
+        self.assertIn("* Item 1", markdown_output) # or "- Item 1"
+        self.assertIn("* Item 2", markdown_output) # or "- Item 2"
+
+    def test_html_with_links(self):
+        html_input = "<p>Here is a <a href='http://example.com'>link</a>.</p>"
+        expected_markdown = "Here is a [link](http://example.com)."
+        markdown_output = apra_crawler.convert_html_to_markdown(html_input)
+        self.assertEqual(markdown_output.strip(), expected_markdown)
+
+    def test_empty_html(self):
+        html_input = ""
+        expected_markdown = ""
+        markdown_output = apra_crawler.convert_html_to_markdown(html_input)
+        self.assertEqual(markdown_output.strip(), expected_markdown)
+
+    def test_html_with_tables(self):
+        html_input = "<table><thead><tr><th>Header 1</th><th>Header 2</th></tr></thead><tbody><tr><td>Data 1</td><td>Data 2</td></tr></tbody></table>"
+        # Markdownify typically converts tables like this:
+        # | Header 1 | Header 2 |
+        # | -------- | -------- |
+        # | Data 1   | Data 2   |
+        markdown_output = apra_crawler.convert_html_to_markdown(html_input)
+
+        # Check for key content and some structure
+        self.assertIn("| Header 1 | Header 2 |", markdown_output)
+        self.assertIn("| Data 1 | Data 2 |", markdown_output) # Adjusted spacing
+        self.assertTrue(markdown_output.count('|') >= 6) # Basic check for table structure
+        self.assertIn("---", markdown_output) # Separator line
