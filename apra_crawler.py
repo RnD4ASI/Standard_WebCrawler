@@ -461,6 +461,14 @@ def main():
                         break
 
                 if main_content_element:
+                    # The main_content_element is converted to a string to pass to markdownify.
+                    # Handling of subheadings within this HTML content:
+                    # - Standard HTML headings (<h1>-<h6>) are converted by markdownify to markdown headings (#, ##, etc.).
+                    # - Thematic breaks (<hr>) are converted to "---" by markdownify based on options.
+                    # - Text styling (bold, italics) within paragraphs is generally preserved.
+                    # - Non-standard subheadings (e.g., <p><b>Subheading</b></p> or CSS-styled headings)
+                    #   will likely be rendered as bolded text or plain text within a paragraph,
+                    #   not as distinct markdown subheadings. Relies on semantic HTML structure.
                     main_content_html = str(main_content_element)
                     markdown_content = convert_html_to_markdown(main_content_html)
 
@@ -515,7 +523,31 @@ def main():
 
 def convert_html_to_markdown(html_content: str) -> str:
     """Converts a string of HTML content to Markdown."""
-    return markdownify.markdownify(html_content)
+    # Configure markdownify options
+    # hr_style='---' will convert <hr> tags to ---
+    # numbering_style='numeric' is usually default for <ol>
+    # keep_inline_images_in=['p'] can help with paragraphs containing images
+    options = {
+        "hr_style": "---",
+        "numbering_style": "numeric", # Explicitly state, though often default
+        "keep_inline_images_in": ["p"]
+    }
+    # It's important to ensure that paragraph text starting with "1. ", "a. ", etc.
+    # is preserved by markdownify. Its default behavior usually handles this for <p> tags.
+    # CSS-generated paragraph numbers (e.g., using counters) are generally not detectable
+    # by HTML-to-markdown converters like markdownify without rendering the page
+    # and inspecting the computed styles, which is beyond the scope here.
+    #
+    # Subheading Handling:
+    # - Standard HTML headings (e.g., <h2>Title</h2>) are converted to markdown equivalents (e.g., ## Title).
+    # - Thematic breaks (<hr>) are converted to "---" due to the 'hr_style' option.
+    # - Text styling like bold (<strong>) or italics (<em>) within paragraphs is preserved.
+    # - Non-standard subheadings (e.g., a <p> tag styled with CSS to look like a heading,
+    #   or a bolded line intended as a subheading) will generally NOT be converted to
+    #   markdown headings (e.g., ### My Subheading). They will be rendered as plain text
+    #   or styled text (e.g., **My Subheading**) within a markdown paragraph.
+    #   The conversion relies on the semantic structure of the input HTML.
+    return markdownify.markdownify(html_content, **options)
 
 if __name__ == "__main__":
     # Ensure csv and time are imported if main() relies on them being in global scope
